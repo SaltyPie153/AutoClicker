@@ -27,13 +27,14 @@ public sealed class InputSurface : System.Windows.Forms.Form {
         }
         base.WndProc(ref m);
     }
-    public static void Test(string method) {
+    public static void Test(string method,string sourcePath) {
         var flags=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Static;
         var t=typeof(PosTap);
         t.GetMethod("SetThreadDpiAwarenessContext",flags).Invoke(null,new object[]{new System.IntPtr(-4)});
         var instance=System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+        var dir=System.IO.Path.Combine(System.IO.Path.GetTempPath(),System.Guid.NewGuid().ToString("N"));
         using (var app=(PosTap)System.Activator.CreateInstance(t,instance,null,new object[]{
-            System.IO.Path.Combine(System.IO.Path.GetTempPath(),System.Guid.NewGuid().ToString("N"),"coordinates.json")},null))
+            System.IO.Path.Combine(dir,"coordinates.json"),System.IO.Path.Combine(dir,"login.bat"),sourcePath},null))
         using (var f=new InputSurface()){
             var mode=(System.Windows.Forms.CheckBox)t.GetField("touchOnly",instance).GetValue(app);
             if (mode.Checked) throw new System.Exception("New settings should default to left click");
@@ -68,5 +69,5 @@ public sealed class InputSurface : System.Windows.Forms.Form {
 }
 '@
 Add-Type -TypeDefinition $source -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Runtime.Serialization,System.Xml
-[InputSurface]::Test('MouseClickAt')
-[InputSurface]::Test('Touch')
+[InputSurface]::Test('MouseClickAt',(Resolve-Path $path).Path)
+[InputSurface]::Test('Touch',(Resolve-Path $path).Path)

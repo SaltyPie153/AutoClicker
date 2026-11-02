@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
@@ -105,22 +106,31 @@ public sealed class PosTap : Form {
     readonly Timer captureDelay = new Timer { Interval=5000 };
     readonly Button start = new Button();
     readonly CheckBox touchOnly = new CheckBox();
+    readonly CheckBox startAtLogin = new CheckBox();
     readonly Label status = new Label();
     Row picking;
-    readonly string settingsPath;
+    readonly string settingsPath, startupPath;
+    readonly byte[] programBytes;
     bool initialized, dirty;
 
     public static void Run() {
         try {
             if (SetThreadDpiAwarenessContext(new IntPtr(-4)) == IntPtr.Zero) SetProcessDPIAware();
         } catch (EntryPointNotFoundException) { SetProcessDPIAware(); }
+        string startupFolder=Environment.GetFolderPath(Environment.SpecialFolder.Startup,Environment.SpecialFolderOption.DoNotVerify);
+        string startupFile=String.IsNullOrEmpty(startupFolder) ? null : Path.Combine(startupFolder,"SaltyPie153.AutoClicker.bat");
+        string source=Path.GetFullPath(Environment.GetEnvironmentVariable("POS_TOUCH_SOURCE"));
         bool first;
         using (Mutex mutex = new Mutex(true, @"Local\POS-Daily-Attendance-Touch-v1", out first)) {
-            if (!first) { MessageBox.Show("이미 실행 중입니다. 작업 표시줄에서 예약 창을 여세요.", "POS 예약 터치"); return; }
+            if (!first) {
+                if (!String.Equals(source,startupFile,StringComparison.OrdinalIgnoreCase))
+                    MessageBox.Show("이미 실행 중입니다. 작업 표시줄에서 예약 창을 여세요.", "POS 예약 터치");
+                return;
+            }
             Application.EnableVisualStyles();
             string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "POS-Touch","coordinates.json");
-            using (PosTap form = new PosTap(settings)) Application.Run(form);
+            using (PosTap form = new PosTap(settings,startupFile,source)) Application.Run(form);
         }
     }
 
@@ -129,13 +139,15 @@ public sealed class PosTap : Form {
         c.SetBounds(x,y,width,height);
         Controls.Add(c);
     }
-    PosTap(string settingsPath) {
+    PosTap(string settingsPath,string startupPath,string sourcePath) {
         this.settingsPath=settingsPath;
+        this.startupPath=startupPath;
+        programBytes=File.ReadAllBytes(sourcePath);
         Text = "포스기 오픈·클로즈 좌표 클릭";
         Font = new Font("Malgun Gothic", 10);
         AutoScaleDimensions = new SizeF(96,96);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(575,325);
+        ClientSize = new Size(575,355);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -151,9 +163,10 @@ public sealed class PosTap : Form {
             row.select.Click += delegate { picking=row; Hide(); captureDelay.Start(); };
         }
         Put(touchOnly,"터치 전용 포스 입력 (기본은 마우스 왼쪽 클릭)",16,183,540,30);
-        Put(start, "예약 시작", 16,224,188,37);
-        Put(new Label(), "다른 화면이 열려 있어도 같은 좌표를 누릅니다.", 217,232,350,28);
-        Put(status, "시각과 위치를 모두 등록한 항목만 실행합니다.",16,277,548,40);
+        Put(startAtLogin,"Windows 로그인 시 프로그램 실행 및 예약 자동 시작",16,213,540,30);
+        Put(start, "예약 시작", 16,254,188,37);
+        Put(new Label(), "다른 화면이 열려 있어도 같은 좌표를 누릅니다.", 217,262,350,28);
+        Put(status, "시각과 위치를 모두 등록한 항목만 실행합니다.",16,307,548,40);
         start.Click += delegate { if (clock.Enabled) Stop("예약을 중지했습니다."); else Arm(); };
         clock.Tick += delegate { TickSchedule(DateTime.Now,SendSelectedInput); };
         captureDelay.Tick += delegate {
@@ -164,6 +177,10 @@ public sealed class PosTap : Form {
         };
         try { LoadSettings(); }
         catch (Exception) { status.Text="저장한 설정을 읽을 수 없습니다. 시각과 위치를 다시 등록하세요."; }
+        startAtLogin.Checked=File.Exists(startupPath);
+        startAtLogin.Click += delegate { SetLoginStart(); };
+        if (String.Equals(sourcePath,startupPath,StringComparison.OrdinalIgnoreCase))
+            Shown += delegate { if (startAtLogin.Checked) Arm(); };
         foreach (Row row in rows) row.time.TextChanged += delegate { dirty=true; };
         touchOnly.CheckedChanged += delegate { dirty=true; };
         FormClosing += delegate(object sender, FormClosingEventArgs e) {
@@ -277,20 +294,50 @@ public sealed class PosTap : Form {
         start.Text=enabled ? "예약 시작" : "예약 중지";
     }
     void Stop(string message) { clock.Stop(); EnableSetup(true); status.Text=message; }
+    void WriteStartupCopy() {
+        if (String.IsNullOrEmpty(startupPath)) throw new IOException("Windows 시작프로그램 폴더를 찾을 수 없습니다.");
+        if (File.Exists(startupPath) && programBytes.SequenceEqual(File.ReadAllBytes(startupPath))) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(startupPath));
+        string tmp=startupPath+"."+Guid.NewGuid().ToString("N")+".tmp";
+        try {
+            File.WriteAllBytes(tmp,programBytes);
+            if (File.Exists(startupPath)) File.Replace(tmp,startupPath,null);
+            else File.Move(tmp,startupPath);
+        } finally { if (File.Exists(tmp)) File.Delete(tmp); }
+    }
+    void SetLoginStart() {
+        try {
+            if (startAtLogin.Checked) {
+                if (!clock.Enabled) PrepareSchedules();
+                WriteStartupCopy();
+                status.Text="다음 Windows 로그인부터 저장한 예약을 자동 시작합니다.";
+            } else {
+                File.Delete(startupPath);
+                status.Text="다음 Windows 로그인부터 자동 시작하지 않습니다.";
+            }
+        } catch (Exception e) {
+            startAtLogin.Checked=File.Exists(startupPath);
+            status.Text="자동 시작 설정 실패 · "+e.Message;
+        }
+    }
+    void PrepareSchedules() {
+        DateTime now=DateTime.Now;
+        foreach (Row row in rows) {
+            row.schedule=null;
+            if (String.IsNullOrWhiteSpace(row.time.Text)) continue;
+            if (row.target==null) throw new FormatException(row.name+" 버튼 위치를 먼저 선택하세요.");
+            if (!OnScreen(row.target.point)) throw new FormatException(row.name+" 좌표가 현재 모니터 밖에 있습니다. 위치를 다시 선택하세요.");
+            row.schedule=new DailyTimes(row.time.Text,now);
+        }
+        if (rows[0].schedule==null && rows[1].schedule==null) throw new FormatException("예약할 시각을 입력하세요.");
+        if (rows[0].schedule!=null && rows[1].schedule!=null && rows[0].schedule.Overlaps(rows[1].schedule))
+            throw new FormatException("오픈과 클로즈 시각이 겹칩니다.");
+        if (dirty || !File.Exists(settingsPath)) SaveSettings();
+    }
     void Arm() {
         try {
-            DateTime now=DateTime.Now;
-            foreach (Row row in rows) {
-                row.schedule=null;
-                if (String.IsNullOrWhiteSpace(row.time.Text)) continue;
-                if (row.target==null) throw new FormatException(row.name+" 버튼 위치를 먼저 선택하세요.");
-                if (!OnScreen(row.target.point)) throw new FormatException(row.name+" 좌표가 현재 모니터 밖에 있습니다. 위치를 다시 선택하세요.");
-                row.schedule=new DailyTimes(row.time.Text,now);
-            }
-            if (rows[0].schedule==null && rows[1].schedule==null) throw new FormatException("예약할 시각을 입력하세요.");
-            if (rows[0].schedule!=null && rows[1].schedule!=null && rows[0].schedule.Overlaps(rows[1].schedule))
-                throw new FormatException("오픈과 클로즈 시각이 겹칩니다.");
-            if (dirty) SaveSettings();
+            PrepareSchedules();
+            if (startAtLogin.Checked) WriteStartupCopy();
             if (touchOnly.Checked && !initialized) {
                 if (!InitializeTouchInjection(1,1)) throw new Win32Exception(Marshal.GetLastWin32Error());
                 initialized=true;
