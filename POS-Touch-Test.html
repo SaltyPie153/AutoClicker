@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>매장 오픈·클로즈 예약 터치 시험 화면</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f1f5f8; color: #19334a; font: 16px/1.5 "Malgun Gothic", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 20px; }
+  h1 { margin: 0; font-size: 26px; }
+  p { margin: 6px 0 16px; }
+  h2 { margin: 16px 0 4px; font-size: 18px; }
+  .schedule { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  #times { font-weight: bold; font-variant-numeric: tabular-nums; }
+  #refresh { padding: 6px 12px; border: 1px solid #71889a; border-radius: 5px; background: white; color: #19334a; }
+  .popup { margin-top: 18px; padding: 24px 10px; text-align: center; border: 1px solid #bccbd5; background: white; }
+  #heading { margin: 0 0 24px; font-size: 22px; }
+  .slot { display: inline-grid; width: 190px; height: 76px; }
+  .slot > * { grid-area: 1/1; }
+  .slot button { border: 0; border-radius: 8px; color: white; background: #36754e; font: bold 24px "Malgun Gothic",sans-serif; touch-action: manipulation; }
+  #marker { display: grid; place-items: center; border: 2px dashed #71889a; border-radius: 8px; color: #526676; }
+  [hidden] { display: none !important; }
+  button:focus-visible { outline: 3px solid #ad5317; outline-offset: 2px; }
+  #events { margin: 0; padding: 10px 12px; height: 116px; overflow: auto; background: white; border: 1px solid #bccbd5; list-style: none; font-variant-numeric: tabular-nums; }
+  #events:empty::before { content: "아직 입력이 없습니다."; color: #53697b; }
+</style>
+<main>
+  <h1>매장 오픈·클로즈 예약 터치 시험 화면</h1>
+  <p>처음에는 점선만 보입니다. 프로그램에서 오픈·클로즈 위치를 각각 점선 중앙으로 지정하세요.</p>
+  <h2>프로그램에 입력할 시험 시각</h2>
+  <div class="schedule"><span id="times"></span><button id="refresh" type="button">시각 다시 계산</button></div>
+  <div class="popup">
+    <h2 id="heading">안내 대기 중</h2>
+    <div class="slot">
+      <span id="marker">버튼이 뜰 자리</span>
+      <button id="register" type="button" hidden></button>
+    </div>
+  </div>
+  <h2>입력 기록</h2>
+  <ol id="events" aria-live="polite"></ol>
+  <p>예약 시작 후 이 창을 맨 앞으로 가져오고 크기와 위치를 유지하세요.<br>연습 버튼은 예약 5초 전부터 보입니다. 두 입력이 각각 ‘터치’로 기록되면 성공입니다.</p>
+</main>
+<script>
+  const pad = n => String(n).padStart(2, '0');
+  const hhmm = date => pad(date.getHours()) + ':' + pad(date.getMinutes());
+  const button = document.querySelector('#register');
+  const marker = document.querySelector('#marker');
+  const heading = document.querySelector('#heading');
+  let openMinute, closeMinute, handled;
+  const promptMinute = now => Math.floor((now + 5000) / 60000);
+  function showPrompt(now = Date.now()) {
+    const minute = promptMinute(now);
+    const action = minute === openMinute ? '오픈' : minute === closeMinute ? '클로즈' : '';
+    const visible = Boolean(action) && minute !== handled;
+    button.hidden = !visible;
+    marker.hidden = visible;
+    button.textContent = visible ? action + ' 등록' : '';
+    heading.textContent = visible ? action + ' 시간을 등록합니다' : '안내 대기 중';
+  }
+  function suggestTimes() {
+    openMinute = Math.floor(Date.now() / 60000) + 3;
+    closeMinute = openMinute + 1;
+    handled = null;
+    document.querySelector('#times').textContent =
+      '오픈 ' + hhmm(new Date(openMinute * 60000)) + '　/　클로즈 ' + hhmm(new Date(closeMinute * 60000));
+    showPrompt();
+  }
+  document.querySelector('#refresh').addEventListener('click', suggestTimes);
+  suggestTimes();
+  setInterval(showPrompt, 250);
+
+  const log = document.querySelector('#events');
+  const names = {touch: '터치', mouse: '마우스', pen: '펜'};
+  function record(input) {
+    if (button.hidden) return;
+    const now = new Date(Date.now());
+    const item = document.createElement('li');
+    item.textContent = hhmm(now) + ':' + pad(now.getSeconds()) + '　' + button.textContent + ' · ' + input;
+    log.append(item);
+    log.scrollTop = log.scrollHeight;
+    handled = promptMinute(now.getTime());
+    showPrompt(now.getTime());
+  }
+  button.addEventListener('pointerup', event => record(names[event.pointerType] || '기타 입력'));
+  button.addEventListener('click', event => { if (event.detail === 0 && !event.pointerType) record('키보드 등'); });
+</script>
+</html>
